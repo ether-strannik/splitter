@@ -8,6 +8,7 @@ Adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- Single-sided printing option (disables duplex, enabled by default)
 - Panorama slicer utility for cutting large images into printable 8.5x11 landscape pages
 - Dynamic page width calculation based on image height ratio
 - Right-to-left slicing mode (start from right edge)

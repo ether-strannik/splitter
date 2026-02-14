@@ -538,7 +538,7 @@ class PanoramaSlicer:
         # Create print dialog
         dialog = tk.Toplevel(self.root)
         dialog.title("Print Pages")
-        dialog.geometry("400x340")
+        dialog.geometry("400x400")
         dialog.resizable(False, False)
         dialog.transient(self.root)
         dialog.grab_set()
@@ -585,6 +585,9 @@ class PanoramaSlicer:
         fit_to_page = tk.BooleanVar(value=True)
         ttk.Checkbutton(opt_frame, text="Fit to page", variable=fit_to_page).pack(anchor=tk.W)
 
+        single_sided = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opt_frame, text="Single-sided (no duplex)", variable=single_sided).pack(anchor=tk.W)
+
         ttk.Label(opt_frame, text="Orientation: Landscape (auto)",
                  foreground="gray").pack(anchor=tk.W)
 
@@ -613,7 +616,7 @@ class PanoramaSlicer:
 
             selected_printer = printer_var.get()
             dialog.destroy()
-            self.print_pages(pages, fit_to_page.get(), selected_printer)
+            self.print_pages(pages, fit_to_page.get(), selected_printer, single_sided.get())
 
         ttk.Button(btn_frame, text="Print", command=do_print).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
@@ -635,7 +638,7 @@ class PanoramaSlicer:
 
         return list(range(start_page, end_page + 1))
 
-    def print_pages(self, page_numbers, fit_to_page=True, printer_name=None):
+    def print_pages(self, page_numbers, fit_to_page=True, printer_name=None, single_sided=True):
         """Print specified pages to the specified printer."""
         self.status_label.config(text="Preparing to print...")
         self.root.update()
@@ -645,7 +648,31 @@ class PanoramaSlicer:
             if not printer_name:
                 printer_name = win32print.GetDefaultPrinter()
 
-            # Create device context for printer
+            # Open printer and set DEVMODE for this job
+            hprinter = win32print.OpenPrinter(printer_name)
+            try:
+                # Get current DEVMODE
+                devmode = win32print.GetPrinter(hprinter, 2)["pDevMode"]
+
+                if devmode:
+                    # Modify settings
+                    if single_sided:
+                        devmode.Duplex = 1  # DMDUP_SIMPLEX
+                        devmode.Fields |= 0x00001000  # DM_DUPLEX
+
+                    devmode.Orientation = 2  # DMORIENT_LANDSCAPE
+                    devmode.Fields |= 0x00000001  # DM_ORIENTATION
+
+                    # Apply modified DEVMODE to printer
+                    # DM_IN_BUFFER = 8, DM_OUT_BUFFER = 2
+                    win32print.DocumentProperties(
+                        0, hprinter, printer_name, devmode, devmode, 8 | 2
+                    )
+
+            finally:
+                win32print.ClosePrinter(hprinter)
+
+            # Create device context - it should pick up the modified settings
             hdc = win32ui.CreateDC()
             hdc.CreatePrinterDC(printer_name)
 
