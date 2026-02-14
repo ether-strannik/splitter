@@ -6,9 +6,17 @@ Click a page cell to export it, or use buttons to export all/visible pages
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk, ImageDraw, ImageWin
 import os
 import math
+
+try:
+    import win32print
+    import win32ui
+    import win32con
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
 
 # Page dimensions in inches (landscape)
 PAGE_WIDTH_INCHES = 11
@@ -68,6 +76,10 @@ class PanoramaSlicer:
 
         ttk.Button(toolbar, text="Export All Pages", command=self.export_all_pages).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Export Visible", command=self.export_visible_pages).pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        ttk.Button(toolbar, text="Print...", command=self.show_print_dialog).pack(side=tk.LEFT, padx=2)
 
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
@@ -512,6 +524,216 @@ class PanoramaSlicer:
 
         self.status_label.config(text=f"Exported {count} visible pages to {self.output_dir}")
         messagebox.showinfo("Complete", f"Exported {count} pages")
+
+    def show_print_dialog(self):
+        """Show print options dialog."""
+        if not self.original_image:
+            messagebox.showwarning("Warning", "Please load an image first")
+            return
+
+        if not HAS_WIN32:
+            messagebox.showerror("Error", "Printing requires pywin32.\nInstall with: pip install pywin32")
+            return
+
+        # Create print dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Print Pages")
+        dialog.geometry("400x340")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Printer selection
+        printer_frame = ttk.LabelFrame(dialog, text="Printer", padding=10)
+        printer_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        # Get list of printers
+        printers = [p[2] for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+        default_printer = win32print.GetDefaultPrinter()
+
+        printer_var = tk.StringVar(value=default_printer)
+        printer_combo = ttk.Combobox(printer_frame, textvariable=printer_var, values=printers, state="readonly", width=45)
+        printer_combo.pack(fill=tk.X)
+
+        # Page selection
+        frame = ttk.LabelFrame(dialog, text="Pages to Print", padding=10)
+        frame.pack(fill=tk.X, padx=10, pady=5)
+
+        page_choice = tk.StringVar(value="all")
+
+        ttk.Radiobutton(frame, text=f"All pages (1-{self.pages_x})",
+                       variable=page_choice, value="all").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Visible pages only",
+                       variable=page_choice, value="visible").pack(anchor=tk.W)
+
+        range_frame = ttk.Frame(frame)
+        range_frame.pack(fill=tk.X, pady=5)
+        ttk.Radiobutton(range_frame, text="Range:",
+                       variable=page_choice, value="range").pack(side=tk.LEFT)
+        range_from = ttk.Entry(range_frame, width=5)
+        range_from.pack(side=tk.LEFT, padx=2)
+        range_from.insert(0, "1")
+        ttk.Label(range_frame, text="to").pack(side=tk.LEFT, padx=2)
+        range_to = ttk.Entry(range_frame, width=5)
+        range_to.pack(side=tk.LEFT, padx=2)
+        range_to.insert(0, str(self.pages_x))
+
+        # Print options
+        opt_frame = ttk.LabelFrame(dialog, text="Options", padding=10)
+        opt_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        fit_to_page = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opt_frame, text="Fit to page", variable=fit_to_page).pack(anchor=tk.W)
+
+        ttk.Label(opt_frame, text="Orientation: Landscape (auto)",
+                 foreground="gray").pack(anchor=tk.W)
+
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def do_print():
+            choice = page_choice.get()
+            if choice == "all":
+                pages = list(range(1, self.pages_x + 1))
+            elif choice == "visible":
+                pages = self.get_visible_page_numbers()
+            else:
+                try:
+                    start = int(range_from.get())
+                    end = int(range_to.get())
+                    pages = list(range(max(1, start), min(self.pages_x, end) + 1))
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid page range")
+                    return
+
+            if not pages:
+                messagebox.showwarning("Warning", "No pages to print")
+                return
+
+            selected_printer = printer_var.get()
+            dialog.destroy()
+            self.print_pages(pages, fit_to_page.get(), selected_printer)
+
+        ttk.Button(btn_frame, text="Print", command=do_print).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+
+    def get_visible_page_numbers(self):
+        """Get list of page numbers currently visible."""
+        canvas_w = self.canvas.winfo_width()
+        view_left = self.pan_x
+        view_right = self.pan_x + canvas_w / self.zoom
+
+        if self.right_to_left.get():
+            start_x = self.img_width - self.start_offset
+            start_page = max(1, int((start_x - view_right) // self.page_width_px) + 1)
+            end_page = min(self.pages_x, int((start_x - view_left) // self.page_width_px) + 1)
+        else:
+            start_x = self.start_offset
+            start_page = max(1, int((view_left - start_x) // self.page_width_px) + 1)
+            end_page = min(self.pages_x, int((view_right - start_x) // self.page_width_px) + 1)
+
+        return list(range(start_page, end_page + 1))
+
+    def print_pages(self, page_numbers, fit_to_page=True, printer_name=None):
+        """Print specified pages to the specified printer."""
+        self.status_label.config(text="Preparing to print...")
+        self.root.update()
+
+        try:
+            # Use default printer if none specified
+            if not printer_name:
+                printer_name = win32print.GetDefaultPrinter()
+
+            # Create device context for printer
+            hdc = win32ui.CreateDC()
+            hdc.CreatePrinterDC(printer_name)
+
+            # Get printable area
+            printable_width = hdc.GetDeviceCaps(win32con.HORZRES)
+            printable_height = hdc.GetDeviceCaps(win32con.VERTRES)
+
+            # Start print job
+            hdc.StartDoc("Panorama Pages")
+
+            for i, page_num in enumerate(page_numbers):
+                self.status_label.config(text=f"Printing page {page_num} ({i+1}/{len(page_numbers)})...")
+                self.root.update()
+
+                # Get page image
+                page_img = self.get_page_image(page_num)
+
+                # Convert to RGB if necessary
+                if page_img.mode != "RGB":
+                    page_img = page_img.convert("RGB")
+
+                # Calculate scaling to fit page
+                img_w, img_h = page_img.size
+
+                if fit_to_page:
+                    # Scale to fit printable area while maintaining aspect ratio
+                    scale_w = printable_width / img_w
+                    scale_h = printable_height / img_h
+                    scale = min(scale_w, scale_h)
+
+                    new_w = int(img_w * scale)
+                    new_h = int(img_h * scale)
+
+                    # Center on page
+                    x = (printable_width - new_w) // 2
+                    y = (printable_height - new_h) // 2
+                else:
+                    new_w, new_h = img_w, img_h
+                    x, y = 0, 0
+
+                # Start page
+                hdc.StartPage()
+
+                # Draw image
+                dib = ImageWin.Dib(page_img)
+                dib.draw(hdc.GetHandleOutput(), (x, y, x + new_w, y + new_h))
+
+                # End page
+                hdc.EndPage()
+
+            # End print job
+            hdc.EndDoc()
+            hdc.DeleteDC()
+
+            self.status_label.config(text=f"Printed {len(page_numbers)} pages")
+            messagebox.showinfo("Complete", f"Printed {len(page_numbers)} pages to {printer_name}")
+
+        except Exception as e:
+            self.status_label.config(text="Print failed")
+            messagebox.showerror("Print Error", f"Failed to print: {e}")
+
+    def get_page_image(self, page_num):
+        """Get a page image by number (without saving to file)."""
+        if self.right_to_left.get():
+            start_x = self.img_width - self.start_offset
+            right = start_x - (page_num - 1) * self.page_width_px
+            left = max(0, right - self.page_width_px)
+        else:
+            start_x = self.start_offset
+            left = start_x + (page_num - 1) * self.page_width_px
+            right = min(left + self.page_width_px, self.img_width)
+
+        top = 0
+        bottom = self.img_height
+
+        page_img = self.original_image.crop((left, top, right, bottom))
+
+        # Pad if needed
+        if page_img.size[0] != self.page_width_px:
+            full_page = Image.new(self.original_image.mode,
+                                 (self.page_width_px, self.page_height_px), (255, 255, 255))
+            if self.right_to_left.get():
+                full_page.paste(page_img, (self.page_width_px - page_img.size[0], 0))
+            else:
+                full_page.paste(page_img, (0, 0))
+            page_img = full_page
+
+        return page_img
 
 
 def main():
