@@ -672,20 +672,18 @@ class PanoramaSlicer:
             finally:
                 win32print.ClosePrinter(hprinter)
 
-            # Create device context - it should pick up the modified settings
-            hdc = win32ui.CreateDC()
-            hdc.CreatePrinterDC(printer_name)
-
-            # Get printable area
-            printable_width = hdc.GetDeviceCaps(win32con.HORZRES)
-            printable_height = hdc.GetDeviceCaps(win32con.VERTRES)
-
-            # Start print job
-            hdc.StartDoc("Panorama Pages")
-
+            # Print each page as separate job to prevent duplex
             for i, page_num in enumerate(page_numbers):
                 self.status_label.config(text=f"Printing page {page_num} ({i+1}/{len(page_numbers)})...")
                 self.root.update()
+
+                # Create fresh DC for each page/job
+                hdc = win32ui.CreateDC()
+                hdc.CreatePrinterDC(printer_name)
+
+                # Get printable area
+                printable_width = hdc.GetDeviceCaps(win32con.HORZRES)
+                printable_height = hdc.GetDeviceCaps(win32con.VERTRES)
 
                 # Get page image
                 page_img = self.get_page_image(page_num)
@@ -713,19 +711,18 @@ class PanoramaSlicer:
                     new_w, new_h = img_w, img_h
                     x, y = 0, 0
 
-                # Start page
+                # Start print job for this single page
+                hdc.StartDoc(f"Panorama Page {page_num}")
                 hdc.StartPage()
 
                 # Draw image
                 dib = ImageWin.Dib(page_img)
                 dib.draw(hdc.GetHandleOutput(), (x, y, x + new_w, y + new_h))
 
-                # End page
+                # End this page and job
                 hdc.EndPage()
-
-            # End print job
-            hdc.EndDoc()
-            hdc.DeleteDC()
+                hdc.EndDoc()
+                hdc.DeleteDC()
 
             self.status_label.config(text=f"Printed {len(page_numbers)} pages")
             messagebox.showinfo("Complete", f"Printed {len(page_numbers)} pages to {printer_name}")
